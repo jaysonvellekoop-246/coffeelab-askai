@@ -304,7 +304,9 @@ Bedrijfsdefinities van Coffeelab (gebruik deze altijd):
 
 JSON_INSTRUCTIE = """
 Antwoord alleen met JSON in dit formaat:
-{"code": "<de pandas-expressie>", "uitleg": "<één of twee zinnen in het Nederlands: wat berekent de code en welke keuzes/aannames zijn gemaakt>"}
+{"code": "<de pandas-expressie>", "uitleg": "<één of twee korte zinnen in eenvoudig Nederlands voor de CFO, zonder code-woorden. Begin met 'Ik reken uit'. Noem hoe je de vraag hebt opgevat: welke begrippen, welke periode en welke groepen>"}
+
+Als de gebruiker extra uitleg of een correctie geeft, volg die dan precies.
 """
 
 
@@ -445,9 +447,23 @@ def schrijf_advies(client, vraag, code, uitleg, resultaat_tekst, bron_label):
     return re.sub(r"\n+(?=\*\*)", "\n\n", tekst)  # elk kopje op een eigen regel
 
 
+def maak_voorstel(client, vraag, schema, correcties=(), met_definities=True):
+    """Stap 1 met controlevraag: AskAI legt eerst uit hoe het de vraag opvat."""
+    volledige_vraag = vraag_met_correcties(vraag, correcties)
+    code, uitleg = genereer_code(client, volledige_vraag, schema, met_definities)
+    return {"vraag": vraag, "correcties": list(correcties), "code": code, "uitleg": uitleg}
+
+
+def vraag_met_correcties(vraag, correcties):
+    if not correcties:
+        return vraag
+    return vraag + "\n\nCorrectie van de gebruiker (volg deze precies): " + " ; ".join(correcties)
+
+
 def beantwoord_vraag(client, vraag, data, schema, bron_label, met_definities=True,
-                     met_advies=True, max_pogingen=2):
-    """De volledige AskAI-pijplijn. Geeft een dict terug met alle tussenstappen."""
+                     met_advies=True, max_pogingen=2, voorstel=None):
+    """De volledige AskAI-pijplijn. Geeft een dict terug met alle tussenstappen.
+    Met `voorstel` (door de gebruiker bevestigd) wordt die code eerst gebruikt."""
     start = time.perf_counter()
     item = {
         "vraag": vraag, "bron": bron_label, "code": "", "uitleg": "", "resultaat": None,
@@ -455,9 +471,18 @@ def beantwoord_vraag(client, vraag, data, schema, bron_label, met_definities=Tru
         "tijdstip": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     code, fout = None, None
+    if voorstel:
+        item["bevestigd"] = True
+        item["correcties"] = voorstel.get("correcties", [])
+        vraag_ai = vraag_met_correcties(vraag, item["correcties"])
+    else:
+        vraag_ai = vraag
     for poging in range(1, max_pogingen + 1):
         try:
-            code, uitleg = genereer_code(client, vraag, schema, met_definities, code, fout)
+            if voorstel and poging == 1:
+                code, uitleg = voorstel["code"], voorstel["uitleg"]
+            else:
+                code, uitleg = genereer_code(client, vraag_ai, schema, met_definities, code, fout)
         except Exception as e:
             item["fout"] = f"Groq-fout: {type(e).__name__}: {e}"
             break
@@ -484,7 +509,7 @@ def beantwoord_vraag(client, vraag, data, schema, bron_label, met_definities=Tru
                 )
             else:
                 item["advies"] = schrijf_advies(
-                    client, vraag, item["code"], item["uitleg"],
+                    client, vraag_ai, item["code"], item["uitleg"],
                     resultaat_als_tekst(item["resultaat"]), bron_label,
                 )
         except Exception as e:
@@ -534,6 +559,11 @@ def toon_askai_antwoord(item, index):
 
     with st.expander("🔍 Controle: hoe is dit berekend?"):
         st.caption(f"Databron: {item['bron']} · duur: {item.get('duur', '?')} s · {item['tijdstip']}")
+        if item.get("bevestigd"):
+            extra = ""
+            if item.get("correcties"):
+                extra = " na correctie: “" + "”, “".join(item["correcties"]) + "”"
+            st.success(f"Deze uitleg van de vraag is door de gebruiker bevestigd{extra}.")
         if item["uitleg"]:
             st.markdown(f"**Uitleg van de AI:** {item['uitleg']}")
         if item["code"]:
@@ -977,9 +1007,10 @@ if pagina == PAGINA_DASHBOARD:
 elif pagina == PAGINA_ASKAI:
     st.subheader("💬 AskAI: stel een vraag over de Coffeelab-data")
     st.caption(
-        "Typ een vraag in gewone taal. De AI (Groq, model gpt-oss-120b) schrijft "
-        "pandas-code, de app rekent het antwoord uit op de echte data, en de AI "
-        "geeft daarna een kort antwoord en advies. Onder elk antwoord kun je bij "
+        "Typ een vraag in gewone taal. AskAI vraagt eerst **“Bedoel je dit?”**. "
+        "Klopt het, dan klik je op Ja. Zo niet, dan typ je wat je wél bedoelt. "
+        "Pas daarna rekent de app het antwoord uit op de echte data en geeft de AI "
+        "een kort antwoord en advies. Onder elk antwoord kun je bij "
         "**🔍 Controle** zien hoe het is berekend."
     )
 
@@ -987,7 +1018,8 @@ elif pagina == PAGINA_ASKAI:
         st.markdown(
             "1. **Vraag → code.** Je vraag gaat samen met alleen de kolomnamen en een "
             "paar voorbeeldwaarden naar Groq. De ruwe verkoopdata gaat níet naar de AI. "
-            "Groq schrijft één regel pandas-code.\n"
+            "Groq schrijft één regel pandas-code en legt in gewone taal uit hoe het je "
+            "vraag heeft opgevat. Jij bevestigt dat eerst (“Bedoel je dit?”) of verbetert het.\n"
             "2. **Code → resultaat.** De app controleert de code (alleen lezen, geen "
             "bestanden, data niet aanpassen) en voert hem uit op de echte data. Geeft "
             "de code een fout, dan krijgt de AI de foutmelding terug en mag hij het "
@@ -1034,22 +1066,67 @@ elif pagina == PAGINA_ASKAI:
     for i, item in enumerate(historie):
         with st.chat_message("user", avatar="🧑‍💼"):
             st.markdown(item["vraag"])
+            for c in item.get("correcties", []):
+                st.markdown(f"*Nee, ik bedoel:* {c}")
         with st.chat_message("assistant", avatar="☕"):
             toon_askai_antwoord(item, i)
 
     vraag = st.chat_input("Stel een vraag over omzet, orders, klanten, provincies...")
     vraag = vraag or gekozen_voorbeeld
 
+    # Stap 1: AskAI legt eerst uit hoe het de vraag opvat ("Bedoel je dit?")
     if vraag:
+        client = maak_groq_client()
+        if client:
+            with st.spinner("AskAI bekijkt wat je bedoelt..."):
+                try:
+                    st.session_state["askai_voorstel"] = maak_voorstel(
+                        client, vraag, maak_schema())
+                except Exception as e:
+                    st.error(f"Groq-fout: {type(e).__name__}: {e}")
+            st.rerun()
+
+    voorstel = st.session_state.get("askai_voorstel")
+    if voorstel:
         with st.chat_message("user", avatar="🧑‍💼"):
-            st.markdown(vraag)
+            st.markdown(voorstel["vraag"])
+            for c in voorstel["correcties"]:
+                st.markdown(f"*Nee, ik bedoel:* {c}")
         with st.chat_message("assistant", avatar="☕"):
+            if voorstel["code"] in ("None", ""):
+                st.markdown(f"**Dit kan ik niet uitrekenen met deze data.** {voorstel['uitleg']}")
+            else:
+                st.markdown(f"**Bedoel je dit?** {voorstel['uitleg']}")
+                with st.expander("Code die ik ga gebruiken"):
+                    st.code(voorstel["code"], language="python")
+            k1, k2 = st.columns([1, 2])
+            ja = k1.button("✅ Ja, reken het uit", key="askai_ja", width="stretch",
+                           disabled=voorstel["code"] in ("None", ""))
+            stop = k1.button("✖️ Annuleren", key="askai_stop", width="stretch")
+            with k2.form("askai_correctie", clear_on_submit=True):
+                correctie = st.text_input("Nee, ik bedoel...", placeholder="Bijv. per provincie in plaats van per klant")
+                opnieuw = st.form_submit_button("🔁 Opnieuw met mijn uitleg")
+
+        if stop:
+            st.session_state.pop("askai_voorstel", None)
+            st.rerun()
+        if opnieuw and correctie.strip():
             client = maak_groq_client()
             if client:
-                with st.spinner("AskAI schrijft code, rekent en schrijft een advies..."):
-                    item = beantwoord_vraag(client, vraag, bron_data, maak_schema(), bron_label)
+                with st.spinner("AskAI past de uitleg aan..."):
+                    st.session_state["askai_voorstel"] = maak_voorstel(
+                        client, voorstel["vraag"], maak_schema(),
+                        correcties=voorstel["correcties"] + [correctie.strip()])
+                st.rerun()
+        if ja:
+            client = maak_groq_client()
+            if client:
+                with st.spinner("AskAI rekent en schrijft een advies..."):
+                    item = beantwoord_vraag(client, voorstel["vraag"], bron_data, maak_schema(),
+                                            bron_label, voorstel=voorstel)
                 historie.append(item)
-                toon_askai_antwoord(item, len(historie) - 1)
+                st.session_state.pop("askai_voorstel", None)
+                st.rerun()
 
     if historie:
         st.divider()
@@ -1064,6 +1141,8 @@ elif pagina == PAGINA_ASKAI:
                 "resultaat_kort": kort_resultaat(h["resultaat"]),
                 "antwoord_en_advies": (h["advies"] or "").replace("\\$", "$"),
                 "fout": h["fout"] or "",
+                "bevestigd_door_gebruiker": "ja" if h.get("bevestigd") else "nee",
+                "correcties": " | ".join(h.get("correcties", [])),
                 "aantal_verbeterpogingen": len(h["pogingen"]),
                 "duur_sec": h.get("duur"),
             }
