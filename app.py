@@ -1122,7 +1122,7 @@ elif pagina == PAGINA_VALIDATIE:
                     "bekende uitkomst": kort_resultaat(referenties[t["id"]]["waarde"]),
                     "handgeschreven pandas-code": t["referentie"],
                 }
-                for t in VALIDATIE_VRAGEN
+                for t in VALIDATIE_VRAGEN_GEKOZEN
             ]),
             hide_index=True,
             width="stretch",
@@ -1144,8 +1144,8 @@ elif pagina == PAGINA_VALIDATIE:
         help="Meer dan 1 laat zien of AskAI steeds hetzelfde antwoord geeft (consistentie).",
     )
     st.caption(
-        f"Dit kost {len(VALIDATIE_VRAGEN) * herhalingen} tot "
-        f"{len(VALIDATIE_VRAGEN) * herhalingen * 2} API-calls en duurt een paar minuten."
+        f"Dit kost {len(VALIDATIE_VRAGEN_GEKOZEN) * herhalingen} tot "
+        f"{len(VALIDATIE_VRAGEN_GEKOZEN) * herhalingen * 2} API-calls en duurt een paar minuten."
     )
 
     if st.button("▶️ Start validatietest"):
@@ -1153,11 +1153,11 @@ elif pagina == PAGINA_VALIDATIE:
         if client:
             schema = maak_schema()
             resultaten = []
-            totaal = len(VALIDATIE_VRAGEN) * herhalingen
+            totaal = len(VALIDATIE_VRAGEN_GEKOZEN) * herhalingen
             voortgang = st.progress(0.0, text="Validatie gestart...")
             stap = 0
             for ronde in range(1, herhalingen + 1):
-                for t in VALIDATIE_VRAGEN:
+                for t in VALIDATIE_VRAGEN_GEKOZEN:
                     stap += 1
                     voortgang.progress(
                         (stap - 1) / totaal,
@@ -1193,6 +1193,7 @@ elif pagina == PAGINA_VALIDATIE:
                 "resultaten": resultaten,
                 "met_definities": met_definities,
                 "herhalingen": herhalingen,
+                "testset": testset,
                 "tijdstip": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
 
@@ -1206,7 +1207,7 @@ elif pagina == PAGINA_VALIDATIE:
 
         st.divider()
         st.markdown(
-            f"**Uitslag van {v['tijdstip']}** · bedrijfsdefinities "
+            f"**Uitslag van {v['tijdstip']}** · testset {v.get('testset', 'Basis')} · bedrijfsdefinities "
             f"{'aan' if v['met_definities'] else 'uit'} · {v['herhalingen']}× per vraag"
         )
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -1250,6 +1251,6 @@ elif pagina == PAGINA_VALIDATIE:
         st.download_button(
             "⬇️ Download validatieresultaten (CSV)",
             res_df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
-            file_name=f"askai_validatie_{'met' if v['met_definities'] else 'zonder'}_definities.csv",
+            file_name=f"askai_validatie_{'moeilijk' if 'Moeilijk' in v.get('testset', '') else 'basis'}_{'met' if v['met_definities'] else 'zonder'}_definities.csv",
             mime="text/csv",
         )
