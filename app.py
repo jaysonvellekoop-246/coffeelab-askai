@@ -451,7 +451,8 @@ def maak_voorstel(client, vraag, schema, correcties=(), met_definities=True):
     """Stap 1 met controlevraag: AskAI legt eerst uit hoe het de vraag opvat."""
     volledige_vraag = vraag_met_correcties(vraag, correcties)
     code, uitleg = genereer_code(client, volledige_vraag, schema, met_definities)
-    return {"vraag": vraag, "correcties": list(correcties), "code": code, "uitleg": uitleg}
+    return {"vraag": vraag, "correcties": list(correcties), "code": code, "uitleg": uitleg,
+            "met_definities": met_definities}
 
 
 def vraag_met_correcties(vraag, correcties):
@@ -1042,6 +1043,10 @@ elif pagina == PAGINA_ASKAI:
         bron_data = gefilterd
         bron_label = f"filterselectie uit de zijbalk ({len(gefilterd):,} van {len(df):,} rijen)"
     st.caption(f"Databron: {bron_label}")
+    askai_def = st.toggle(
+        "Bedrijfsdefinities meegeven aan de AI", value=True, key="askai_def",
+        help="Uit: de AI krijgt alleen de kolomnamen. Handig om te testen of de controlevraag dan helpt.",
+    )
 
     st.markdown("**Voorbeeldvragen** (klik om te stellen):")
     voorbeeldvragen = [
@@ -1081,7 +1086,7 @@ elif pagina == PAGINA_ASKAI:
             with st.spinner("AskAI bekijkt wat je bedoelt..."):
                 try:
                     st.session_state["askai_voorstel"] = maak_voorstel(
-                        client, vraag, maak_schema())
+                        client, vraag, maak_schema(), met_definities=askai_def)
                 except Exception as e:
                     st.error(f"Groq-fout: {type(e).__name__}: {e}")
             st.rerun()
@@ -1116,14 +1121,16 @@ elif pagina == PAGINA_ASKAI:
                 with st.spinner("AskAI past de uitleg aan..."):
                     st.session_state["askai_voorstel"] = maak_voorstel(
                         client, voorstel["vraag"], maak_schema(),
-                        correcties=voorstel["correcties"] + [correctie.strip()])
+                        correcties=voorstel["correcties"] + [correctie.strip()],
+                        met_definities=voorstel.get("met_definities", True))
                 st.rerun()
         if ja:
             client = maak_groq_client()
             if client:
                 with st.spinner("AskAI rekent en schrijft een advies..."):
                     item = beantwoord_vraag(client, voorstel["vraag"], bron_data, maak_schema(),
-                                            bron_label, voorstel=voorstel)
+                                            bron_label, voorstel=voorstel,
+                                            met_definities=voorstel.get("met_definities", True))
                 historie.append(item)
                 st.session_state.pop("askai_voorstel", None)
                 st.rerun()
