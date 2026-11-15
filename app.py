@@ -578,14 +578,52 @@ VALIDATIE_VRAGEN = [
      "referentie": 'df.groupby("Product L2")["Bedrag"].sum().idxmax()'},
 ]
 
+# Moeilijkere testvragen: nog steeds één controleerbaar antwoord, maar AskAI moet
+# meerdere stappen combineren (groeperen, delen, filteren op jaar, drempels,
+# kostprijs gebruiken) en soms zelf bepalen wat een begrip betekent.
+VALIDATIE_MOEILIJK = [
+    {"id": 101, "vraag": "Met hoeveel procent is de omzet gegroeid van 2022 naar 2023?",
+     "referentie": '(df.loc[df["Orderdatum"].dt.year == 2023, "Bedrag"].sum() / df.loc[df["Orderdatum"].dt.year == 2022, "Bedrag"].sum() - 1) * 100'},
+    {"id": 102, "vraag": "Welke provincie heeft het hoogste percentage openstaande omzet?",
+     "referentie": '(df.loc[df["Status"] == "Openstaand"].groupby("Provincie")["Bedrag"].sum() / df.groupby("Provincie")["Bedrag"].sum()).idxmax()'},
+    {"id": 103, "vraag": "Hoeveel klanten hebben in totaal meer dan 1 miljoen euro omzet?",
+     "referentie": '(df.groupby("Klantnummer")["Bedrag"].sum() > 1000000).sum()'},
+    {"id": 104, "vraag": "Wat is de gemiddelde orderwaarde van de orders die nog openstaan?",
+     "referentie": 'df.loc[df["Status"] == "Openstaand", "Bedrag"].sum() / df.loc[df["Status"] == "Openstaand", "Ordernummer"].nunique()'},
+    {"id": 105, "vraag": "Welk type klant heeft de hoogste gemiddelde orderwaarde?",
+     "referentie": '(df.groupby("Type")["Bedrag"].sum() / df.groupby("Type")["Ordernummer"].nunique()).idxmax()'},
+    {"id": 106, "vraag": "Hoeveel brutomarge in euro heeft Coffeelab in totaal gemaakt?",
+     "referentie": 'df["Bedrag"].sum() - df["Kostprijs omzet"].sum()'},
+    {"id": 107, "vraag": "Welke productgroep (Product L2) heeft de hoogste marge in procenten?",
+     "referentie": '((df.groupby("Product L2")["Bedrag"].sum() - df.groupby("Product L2")["Kostprijs omzet"].sum()) / df.groupby("Product L2")["Bedrag"].sum()).idxmax()'},
+    {"id": 108, "vraag": "Welk percentage van de klanten heeft nog een openstaand bedrag?",
+     "referentie": 'df.loc[df["Status"] == "Openstaand", "Klantnummer"].nunique() / df["Klantnummer"].nunique() * 100'},
+    {"id": 109, "vraag": "Hoeveel orders hebben een totale orderwaarde van meer dan 1.000 euro?",
+     "referentie": '(df.groupby("Ordernummer")["Bedrag"].sum() > 1000).sum()'},
+    {"id": 110, "vraag": "Hoeveel euro verschil in omzet zit er tussen de provincie met de hoogste en de laagste omzet?",
+     "referentie": 'df.groupby("Provincie")["Bedrag"].sum().max() - df.groupby("Provincie")["Bedrag"].sum().min()'},
+    {"id": 111, "vraag": "In welke provincie is de omzet van koffiemachines het hoogst?",
+     "referentie": 'df.loc[df["Product L1"].str.contains("machine", case=False, na=False)].groupby("Provincie")["Bedrag"].sum().idxmax()'},
+    {"id": 112, "vraag": "Welke klant had in 2023 de hoogste omzet?",
+     "referentie": 'df.loc[df["Orderdatum"].dt.year == 2023].groupby("Klantnummer")["Bedrag"].sum().idxmax()'},
+]
+
+TESTSETS = {
+    "Basis (12 vragen)": VALIDATIE_VRAGEN,
+    "Moeilijk (12 vragen)": VALIDATIE_MOEILIJK,
+}
+
 
 @st.cache_data
 def referentie_uitkomsten():
     d = load_data()
     uitkomsten = {}
-    for t in VALIDATIE_VRAGEN:
+    for t in VALIDATIE_VRAGEN + VALIDATIE_MOEILIJK:
         start = time.perf_counter()
-        waarde = voer_code_uit(t["referentie"], d)
+        try:
+            waarde = voer_code_uit(t["referentie"], d)
+        except Exception as e:  # bijv. als een kolom ontbreekt
+            waarde = f"(referentie mislukt: {type(e).__name__})"
         uitkomsten[t["id"]] = {"waarde": waarde, "tijd": time.perf_counter() - start}
     return uitkomsten
 
@@ -1061,6 +1099,19 @@ elif pagina == PAGINA_VALIDATIE:
     )
 
     referenties = referentie_uitkomsten()
+
+    testset = st.radio(
+        "Testset",
+        list(TESTSETS),
+        horizontal=True,
+        key="testset",
+        help=(
+            "Basis: eenvoudige kerncijfers. Moeilijk: vragen waarbij AskAI meerdere "
+            "stappen moet combineren, zoals groeien tussen jaren, drempels, marges "
+            "met de kostprijs en percentages per groep."
+        ),
+    )
+    VALIDATIE_VRAGEN_GEKOZEN = TESTSETS[testset]
 
     with st.expander("Bekijk de testvragen en de traditionele pandas-analyse (bekende uitkomsten)"):
         st.dataframe(
